@@ -1,0 +1,22 @@
+# Virtual environment
+.venv/
+venv/
+
+# Downloaded dataset - unzip before use (see README.md)
+data/
+
+# Model files (too large for Git)
+models/*.h5
+models/*.zip
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
