@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 import tensorflow as tf
-from tensorflow import keras
+import keras
 import mediapipe as mp
 import asyncio
 import websockets
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 class ASLPipeline:
     
-    def __init__(self, model_path: str = "ASL.h5"):
+    def __init__(self, model_path: str = "models/ASL.h5"):
         """Initialize the ASL pipeline with MediaPipe and ASL model"""
         
         # ASL class labels (29 classes: A-Z, space, del, nothing)
@@ -267,14 +267,24 @@ class ASLWebSocketServer:
         self.port = port
         self.pipeline = ASLPipeline()
     
-    async def handle_client(self, websocket, path):
+    async def handle_client(self, websocket, path=None):
         """Handle incoming WebSocket connections
 
         Routes:
         - default (no path) : existing JSON-based messages (webcam_frame/test)
         - /ws/stream/       : binary MediaRecorder stream handler (video/webm chunks)
         """
-        logger.info(f"Client connected: {websocket.remote_address} path={path}")
+        # Handle different websockets library versions
+        if path is None:
+            # Try multiple attributes where path might be stored
+            path = getattr(websocket, 'path', None)
+            if path is None:
+                path = getattr(websocket, 'request_path', None)
+            if path is None and hasattr(websocket, 'request'):
+                path = getattr(websocket.request, 'path', None)
+        
+        logger.info(f"Client connected: {getattr(websocket, 'remote_address', 'unknown')} path={path}")
+        logger.info(f"WebSocket object attributes: {dir(websocket)[:20]}")  # Debug: show available attributes
 
         # Route stream path to the specialized handler that consumes webm chunks
         if path == "/ws/stream/":
@@ -367,7 +377,7 @@ class ASLWebSocketServer:
                 logger.error(f"FFmpeg stdout reader error: {e}")
 
         # Start the blocking stdout reader in a thread
-        reader_task = asyncio.to_thread(_stdout_reader, proc.stdout, frame_bytes, loop, frame_queue)
+        reader_task = asyncio.create_task(asyncio.to_thread(_stdout_reader, proc.stdout, frame_bytes, loop, frame_queue))
 
         # Task: receive websocket messages and feed to ffmpeg.stdin
         async def websocket_to_ffmpeg():
