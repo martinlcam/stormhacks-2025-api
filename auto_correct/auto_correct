@@ -2,8 +2,7 @@ import numpy as np
 
 class auto_correct:
     def __init__(self):
-        self.word = ""
-        self.words_list = []
+        self.sentence = ""
         self.current_sentence_idx = 0
         self.target_letters = []
         self.target_letters_data = []
@@ -48,29 +47,36 @@ class auto_correct:
                 if self.target_letters_data[remaining_idx]["frames_out_range"] > frames_range:
                     if self.target_letters_data[remaining_idx]["appearances"] >= min_appear:
                         if idx_letter <= 25:
-                            self.word += chr(idx_letter + ord('A'))
+                            self.sentence += chr(idx_letter + ord('A'))
                         elif idx_letter == 26:
-                            self.word = self.word[:-1]
+                            self.sentence = self.sentence[:-1]
                         elif idx_letter == 28:
-                                self.words_list.append(self.word)
-                                self.word = ''
+                                self.sentence = self.sentence.rstrip() + " "
 
                     self.target_letters.pop(remaining_idx)
                     self.target_letters_data.pop(remaining_idx)
 
 
     def get_words(self, amount):
+        words = self.sentence.split(" ")
         # clears double spacing
-        self.words_list = [w for w in self.words_list if w != '']
+        while '' in words:
+            words.remove('')
 
-        if len(self.words_list) - self.current_sentence_idx < amount: 
+        if len(words) - self.current_sentence_idx < amount: 
             return -1
         else:
             string = ""
-            for i in range(self.current_sentence_idx, self.current_sentence_idx +amount):
-                string += self.words_list[i] + " "
+            for i in range(self.current_sentence_idx, self.current_sentence_idx + amount):
+                string += words[i] + " "
             self.current_sentence_idx += amount
             return string.strip()
+
+    def puntutation_checker(self):
+        pass
+
+    def spell_checker(self):
+        pass
 
     def context_model(self):
         pass
