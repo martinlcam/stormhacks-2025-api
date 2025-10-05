@@ -16,6 +16,8 @@ import os
 from io import BytesIO
 from PIL import Image
 import logging
+import subprocess
+import time
 from typing import Optional, Dict, Any, Tuple
 
 # Set up logging
@@ -272,19 +274,33 @@ class ASLWebSocketServer:
         self.pipeline = ASLPipeline()
     
     async def handle_client(self, websocket, path):
-        """Handle incoming WebSocket connections"""
-        logger.info(f"Client connected: {websocket.remote_address}")
-        
+        """Handle incoming WebSocket connections
+
+        Routes:
+        - default (no path) : existing JSON-based messages (webcam_frame/test)
+        - /ws/stream/       : binary MediaRecorder stream handler (video/webm chunks)
+        """
+        logger.info(f"Client connected: {websocket.remote_address} path={path}")
+
+        # Route stream path to the specialized handler that consumes webm chunks
+        if path == "/ws/stream/":
+            try:
+                await self.handle_stream(websocket)
+            except Exception as e:
+                logger.error(f"Stream handler error: {e}")
+            return
+
+        # Fallback: existing JSON message handling
         try:
             async for message in websocket:
                 try:
                     data = json.loads(message)
-                    
+
                     if data.get("type") == "webcam_frame":
                         # Process webcam frame
                         response = await self.process_webcam_frame(data)
                         await websocket.send(json.dumps(response))
-                    
+
                     elif data.get("type") == "test":
                         # Test message
                         response = {
@@ -293,23 +309,174 @@ class ASLWebSocketServer:
                             "timestamp": data.get("timestamp")
                         }
                         await websocket.send(json.dumps(response))
-                    
+
                 except json.JSONDecodeError:
                     error_response = {
                         "type": "error",
                         "message": "Invalid JSON format"
                     }
                     await websocket.send(json.dumps(error_response))
-                
+
                 except Exception as e:
                     error_response = {
                         "type": "error",
                         "message": f"Processing error: {str(e)}"
                     }
                     await websocket.send(json.dumps(error_response))
-        
+
         except websockets.exceptions.ConnectionClosed:
             logger.info(f"Client disconnected: {websocket.remote_address}")
+
+    async def handle_stream(self, websocket):
+        """Handle binary stream from MediaRecorder (webm chunks).
+
+        Strategy:
+        - Spawn an ffmpeg subprocess that reads from stdin (pipe:0) and writes raw RGB frames to stdout.
+        - Feed incoming binary messages into ffmpeg.stdin as they arrive.
+        - Read fixed-size raw frames from ffmpeg.stdout, convert to BGR OpenCV images, run the ASL pipeline.
+        - Batch every N frames (default 10) and send an aggregated prediction back to the client.
+        """
+        logger.info(f"Starting stream handler for {websocket.remote_address}")
+
+        # Configuration
+        batch_size = 10
+        width, height = 320, 240
+        frame_bytes = width * height * 3  # rgb24
+
+        # ffmpeg command: read webm from stdin, scale to target resolution, output raw RGB24 frames to stdout
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel", "error",
+            "-i", "pipe:0",
+            "-vf", f"scale={width}:{height}",
+            "-f", "rawvideo",
+            "-pix_fmt", "rgb24",
+            "pipe:1"
+        ]
+
+        proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        loop = asyncio.get_running_loop()
+        frame_queue: asyncio.Queue[bytes] = asyncio.Queue()
+
+        def _stdout_reader(stdout, frame_size, loop, q):
+            try:
+                while True:
+                    data = stdout.read(frame_size)
+                    if not data or len(data) < frame_size:
+                        # EOF or incomplete frame
+                        break
+                    # schedule putting the frame bytes into the asyncio queue
+                    asyncio.run_coroutine_threadsafe(q.put(data), loop)
+            except Exception as e:
+                logger.error(f"FFmpeg stdout reader error: {e}")
+
+        # Start the blocking stdout reader in a thread
+        reader_task = asyncio.to_thread(_stdout_reader, proc.stdout, frame_bytes, loop, frame_queue)
+
+        # Task: receive websocket messages and feed to ffmpeg.stdin
+        async def websocket_to_ffmpeg():
+            try:
+                async for msg in websocket:
+                    if isinstance(msg, (bytes, bytearray)):
+                        # write bytes to ffmpeg stdin
+                        try:
+                            proc.stdin.write(msg)
+                            proc.stdin.flush()
+                        except Exception as e:
+                            logger.error(f"Failed to write to ffmpeg stdin: {e}")
+                    else:
+                        # ignore text messages for stream handler
+                        logger.debug("Ignoring text message on stream socket")
+            finally:
+                try:
+                    if proc.stdin:
+                        proc.stdin.close()
+                except Exception:
+                    pass
+
+        ws_writer = asyncio.create_task(websocket_to_ffmpeg())
+
+        # Task: consume frames from ffmpeg stdout, run pipeline, batch results
+        async def process_frames():
+            predictions_batch = []
+            frame_count = 0
+
+            try:
+                while True:
+                    frame_bytes_data = await frame_queue.get()
+                    # convert raw rgb bytes to numpy array
+                    img_rgb = np.frombuffer(frame_bytes_data, dtype=np.uint8)
+                    try:
+                        img_rgb = img_rgb.reshape((height, width, 3))
+                    except Exception as e:
+                        logger.error(f"Invalid frame shape: {e}")
+                        continue
+
+                    # Convert RGB -> BGR for OpenCV
+                    img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+
+                    # Run pipeline on this frame
+                    result = self.pipeline.process_frame(img_bgr)
+
+                    # Collect prediction_vector if available
+                    if result.get("prediction_vector"):
+                        vec = np.array(result["prediction_vector"]).reshape(29,)
+                    else:
+                        vec = np.zeros(29, dtype=float)
+
+                    predictions_batch.append(vec)
+                    frame_count += 1
+
+                    # When batch is full, aggregate and send result
+                    if frame_count >= batch_size:
+                        avg_vec = np.mean(np.stack(predictions_batch, axis=0), axis=0)
+                        pred_idx = int(np.argmax(avg_vec))
+                        pred_sign = self.pipeline.class_labels[pred_idx] if hasattr(self.pipeline, 'class_labels') else str(pred_idx)
+                        confidence = float(avg_vec[pred_idx])
+
+                        response = {
+                            "type": "asl_batch",
+                            "timestamp": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                            "batch_size": frame_count,
+                            "predicted_sign": pred_sign,
+                            "confidence": confidence,
+                            "avg_prediction_vector": avg_vec.tolist()
+                        }
+
+                        try:
+                            await websocket.send(json.dumps(response))
+                        except Exception as e:
+                            logger.error(f"Failed to send batch response: {e}")
+
+                        # reset batch
+                        predictions_batch = []
+                        frame_count = 0
+
+            except asyncio.CancelledError:
+                logger.info("process_frames cancelled")
+            except Exception as e:
+                logger.error(f"process_frames error: {e}")
+
+        processor_task = asyncio.create_task(process_frames())
+
+        # Wait for websocket writer to finish (client closed) or tasks to error
+        done, pending = await asyncio.wait([ws_writer, reader_task, processor_task], return_when=asyncio.FIRST_COMPLETED)
+
+        # Clean up
+        for t in pending:
+            try:
+                t.cancel()
+            except Exception:
+                pass
+
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+        logger.info(f"Stream handler finished for {websocket.remote_address}")
     
     async def process_webcam_frame(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Process incoming webcam frame through ASL pipeline"""
