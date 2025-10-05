@@ -25,7 +25,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class ASLPipeline:
-    """Complete ASL recognition pipeline from webcam frames to predictions"""
     
     def __init__(self, model_path: str = "ASL.h5"):
         """Initialize the ASL pipeline with MediaPipe and ASL model"""
