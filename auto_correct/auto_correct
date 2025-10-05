@@ -1,0 +1,76 @@
+import numpy as np
+
+class auto_correct:
+    def __init__(self):
+        self.sentence = ""
+        self.current_sentence_idx = 0
+        self.target_letters = []
+        self.target_letters_data = []
+
+    # frames_range default is relative to 10 fps
+    def proccess_frame(
+        self, 
+        prob_arr: np.ndarray, 
+        num_frames: int, 
+        top: int = 1, 
+        frames_range: int = 7, 
+        min_appear:int = 4
+        ) -> np.ndarray:
+        
+        # number of times a number doesn't appear in a frame until it is removed and analysed
+        # takes in the first top letters
+        for i in range(num_frames):
+            # arr_sor and arr_argsort are allgined to each other
+
+            # arr_sort = np.sort(prob_arr[i])  <-------------------- only use if you want to implement prob thresholding
+            arr_argsort = np.argsort(prob_arr[i])
+            # top_sort = arr_sort[::-1][:top] <-------------------- only use if you want to implement prob thresholding
+            top_argsort = arr_argsort[::-1][:top]
+
+            remaining  = self.target_letters.copy()
+            # for all the words in top_sort
+            for j in range(top):
+                if top_argsort[j] not in self.target_letters:
+                    self.target_letters.append(top_argsort[j])
+                    self.target_letters_data.append({"letter_idx": top_argsort[j], "appearances": 1, "frames_out_range": 0})
+                else:
+                    remaining.remove(top_argsort[j])
+                    idx = self.target_letters.index(top_argsort[j])
+                    self.target_letters_data[idx]["frames_out_range"] = 0
+                    self.target_letters_data[idx]["appearances"] += 1
+                
+            for idx_letter in reversed(remaining):
+                remaining_idx = self.target_letters.index(idx_letter)
+
+                self.target_letters_data[remaining_idx]["frames_out_range"] += 1
+
+                if self.target_letters_data[remaining_idx]["frames_out_range"] > frames_range:
+                    if self.target_letters_data[remaining_idx]["appearances"] >= min_appear:
+                        if idx_letter <= 25:
+                            self.sentence += chr(idx_letter + ord('A'))
+                        elif idx_letter == 26:
+                            self.sentence = self.sentence[:-1]
+                        elif idx_letter == 28:
+                                self.sentence = self.sentence.rstrip() + " "
+
+                    self.target_letters.pop(remaining_idx)
+                    self.target_letters_data.pop(remaining_idx)
+
+
+    def get_words(self, amount):
+        words = self.sentence.split(" ")
+        # clears double spacing
+        while '' in words:
+            words.remove('')
+
+        if len(words) - self.current_sentence_idx < amount: 
+            return -1
+        else:
+            string = ""
+            for i in range(self.current_sentence_idx, amount):
+                string += words[i] + " "
+            self.current_sentence_idx += amount
+            return string.strip()
+
+    def context_model(self):
+        pass
