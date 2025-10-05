@@ -9,9 +9,6 @@ data/
 models/*.h5
 models/*.zip
 
-# MediaPipe model (comment out the line below if you want to include it in repo)
-# models/hand_landmarker.task
-
 # Python cache
 __pycache__/
 *.pyc
