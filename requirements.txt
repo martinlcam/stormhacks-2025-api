@@ -2,3 +2,6 @@ opencv-python
 numpy
 websockets
 torch
+tensorflow
+
+#pip install -r requirements.txt
