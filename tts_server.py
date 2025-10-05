@@ -17,7 +17,7 @@ app.add_middleware(
 )
 
 # Your API key
-ELEVENLABS_API_KEY = "sk_f5032056e13c161bd72ed8718d34d1b6ce2d0a5baf26d04e"
+ELEVENLABS_API_KEY = "sk_e9c8679697a1343d65ea2f0d018f12d5beb95a0b07674cf6"
 VOICE_ID = "21m00Tcm4TlvDq8ikWAM"
 
 
