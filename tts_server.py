@@ -20,7 +20,6 @@ app.add_middleware(
 ELEVENLABS_API_KEY = "sk_e9c8679697a1343d65ea2f0d018f12d5beb95a0b07674cf6"
 VOICE_ID = "21m00Tcm4TlvDq8ikWAM"
 
-
 async def stream_tts_to_client(text_generator_func, client_websocket):
     """
     Stream TTS audio from ElevenLabs to the client WebSocket.

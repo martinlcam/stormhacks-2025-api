@@ -1,8 +1,3 @@
-"""
-ASL Recognition Pipeline: WebSocket → MediaPipe → ASL.h5 → (1, 29) output vector
-Complete integration for real-time ASL recognition from webcam frames.
-"""
-
 import cv2
 import numpy as np
 import tensorflow as tf
